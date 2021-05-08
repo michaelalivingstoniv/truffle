@@ -99,7 +99,7 @@ describe("ENS class", () => {
 
       describe("when the name is owned by the from address", async () => {
         beforeEach(async () => {
-          registryOwnerAddress = await registry.owner("0x0");
+          const registryOwnerAddress = await registry.owner("0x0");
           addressToSet = "0x1234567890123456789012345678901234567890";
           await registry.setSubnodeOwner(
             "0x0",
