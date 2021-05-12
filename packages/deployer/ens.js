@@ -1,94 +1,140 @@
-const ENSJS = require("ethereum-ens");
+const path = require("path");
+const { default: ENSJS, getEnsAddress } = require("@ensdomains/ensjs");
 const contract = require("@truffle/contract");
 const { sha3 } = require("web3-utils");
 const { hash } = require("eth-ens-namehash");
 
+const deployENS = async ({ config, deployer, from = config.from }) => {
+  const artifacts = config.resolver;
+  const searchPath = path.join(config.truffle_directory, "..", "..");
+  const ENS = artifacts.require("@ensdomains/ens/ENSRegistry", searchPath);
+  const FIFSRegistrar = artifacts.require("@ensdomains/ens/FIFSRegistrar", searchPath);
+  const PublicResolver = artifacts.require("@ensdomains/resolver/PublicResolver", searchPath);
+
+  const nodes = {
+    root: "0x0000000000000000000000000000000000000000",
+    resolver: hash("resolver"),
+  };
+
+  const labels = {
+    root: "",
+    resolver: sha3("resolver"),
+  };
+
+  await deployer.start();
+
+  await deployer.deploy(ENS, { from });
+  const ens = await ENS.deployed();
+
+
+  await deployer.deploy(PublicResolver, ens.address, { from });
+
+
+  const resolver = await PublicResolver.deployed();
+
+  await ens.setSubnodeOwner(nodes.root, labels.resolver, from, { from });
+  await ens.setResolver(nodes.root, resolver.address, { from });
+  await resolver.methods["setAddr(bytes32,address)"](nodes.resolver, resolver.address, { from });
+
+  await deployer.deploy(FIFSRegistrar, ens.address, nodes.root, { from });
+  const registrar = await FIFSRegistrar.deployed();
+
+  console.debug("deployed registrar");
+  await ens.setOwner(nodes.root, registrar.address, { from });
+  console.debug("owner set");
+
+
+  await deployer.finish();
+
+  return {
+    ens,
+    resolver
+  };
+};
+
 class ENS {
-  constructor({ provider, ensSettings }) {
+  constructor({ config, deployer, ensSettings }) {
     this.ensSettings = ensSettings;
-    this.provider = provider;
+    this.provider = config.provider;
+    this.config = config;
+    this.deployer = deployer;
+    this.networkId = config.network_id;
     this.devRegistry = null;
+    this.ens = null;
   }
 
-  determineENSRegistryAddress() {
-    if (this.ensSettings.registryAddress) {
-      return this.ensSettings.registryAddress;
-    } else if (
-      this.ensjs &&
-      this.ensjs.registryPromise._rejectionHandler0._address
-    ) {
-      return this.ensjs.registryPromise._rejectionHandler0._address;
-    } else {
-      const message =
-        `Truffle could not locate the address of the ENS ` +
-        `registry for the network you are using. You must either be on a` +
-        `known network or a development blockchain.`;
-      throw new Error(message);
-    }
-  }
+  // get registryAddress() {
+  //   return this.ensSettings.registryAddress || getEnsAddress(this.networkId);
+  // }
 
-  async deployNewDevENSRegistry(from) {
-    const ENSRegistryArtifact = require("@ensdomains/ens").ENSRegistry;
-    const ENSRegistry = contract(ENSRegistryArtifact);
-    ENSRegistry.setProvider(this.provider);
-    const ensRegistry = await ENSRegistry.new({ from });
-    this.ensSettings.registryAddress = ensRegistry.address;
-    this.devRegistry = ensRegistry;
-    this.setENSJS();
-    return ensRegistry;
+  async prepareENS(from) {
+    const { ens, resolver } = await deployENS({
+      config: this.config,
+      deployer: this.deployer,
+      from
+    });
+
+    this.ensSettings.registryAddress = ens.address;
+    this.ens = new ENSJS({
+      provider: this.provider,
+      ensAddress: ens.address
+    });
+    this.resolver = resolver;
+    return ens;
   }
 
   async ensureRegistryExists(from) {
-    // See if registry exists on network by resolving an arbitrary address
-    // If no registry exists then deploy one
-    try {
-      await this.ensjs.owner("0x0");
-    } catch (error) {
-      const noRegistryFound =
-        error.message ===
-        "This contract object doesn't have address set yet, please set an address first.";
-      if (noRegistryFound) {
-        await this.deployNewDevENSRegistry(from);
-        this.setENSJS();
-      } else {
-        throw error;
-      }
+    if (!this.ens) {
+      await this.prepareENS(from);
     }
+    // // See if registry exists on network by resolving an arbitrary address
+    // // If no registry exists then deploy one
+    // try {
+    //   await this.ensjs.owner("0x0");
+    // } catch (error) {
+    //   const noRegistryFound =
+    //     error.message ===
+    //     "This contract object doesn't have address set yet, please set an address first.";
+    //   if (noRegistryFound) {
+    //     await this.deployNewDevENSRegistry(from);
+    //   } else {
+    //     throw error;
+    //   }
+    // }
   }
 
-  async ensureResolverExists({ from, name }) {
-    // See if the resolver is set, if not then set it
-    let resolvedAddress, publicResolver;
-    try {
-      resolvedAddress = await this.ensjs.resolver(name).addr();
-      return { resolvedAddress };
-    } catch (error) {
-      if (error.message !== "ENS name not found") throw error;
-      const PublicResolverArtifact = require("@ensdomains/resolver")
-        .PublicResolver;
-      const PublicResolver = contract(PublicResolverArtifact);
-      PublicResolver.setProvider(this.provider);
+  // async ensureResolverExists({ from, name }) {
+  //   // See if the resolver is set, if not then set it
+  //   let resolvedAddress, publicResolver;
+  //   try {
+  //     resolvedAddress = await this.ens.name(name).getAddress("ETH");
+  //     return { resolvedAddress };
+  //   } catch (error) {
+  //     if (error.message !== "ENS name not found") throw error;
+  //     const PublicResolverArtifact = require("@ensdomains/resolver")
+  //       .PublicResolver;
+  //     const PublicResolver = contract(PublicResolverArtifact);
+  //     PublicResolver.setProvider(this.provider);
 
-      let registryAddress = this.determineENSRegistryAddress();
+  //     let registryAddress = this.determineENSRegistryAddress();
 
-      publicResolver = await PublicResolver.new(registryAddress, { from });
-      await this.ensjs.setResolver(name, publicResolver.address, { from });
-      return { resolvedAddress: null };
-    }
-  }
+  //     publicResolver = await PublicResolver.new(registryAddress, { from });
+  //     const tx = await this.ens.name(name)
+  //       .setResolver(publicResolver.address, { from });
+  //     await tx.wait();
+  //     return { resolvedAddress: null };
+  //   }
+  // }
 
   async setAddress(name, addressOrContract, { from }) {
     this.validateSetAddressInputs({ addressOrContract, name, from });
     const address = this.parseAddress(addressOrContract);
-    this.setENSJS();
     await this.ensureRegistryExists(from);
 
-    // In the case where there is a registry deployed by the user,
-    // set permissions so that the resolver can be set by the user
-    if (this.devRegistry) await this.setNameOwner({ from, name });
+    await this.setNameOwner({ from, name });
 
     // Find the owner of the name and compare it to the "from" field
-    const nameOwner = await this.ensjs.owner(name);
+    const nameOwner = await this.ens.name(name).getOwner();
 
     if (nameOwner !== from) {
       const message =
@@ -101,35 +147,72 @@ class ENS {
       throw new Error(message);
     }
 
-    const { resolvedAddress } = await this.ensureResolverExists({ from, name });
+    const resolvedAddress = await this.ens.name(name).getAddress("ETH");
+
+    const hasResolver = (await this.ens.name(name).getResolver())
+      .slice(2)
+      .split("")
+      .filter(char => char !== "0")
+      .length > 0;
+
+    if (!hasResolver) {
+      const tx = await this.ens.name(name)
+        .setResolver(this.resolver.address, { from });
+      await tx.wait();
+    }
+
+    // const { resolvedAddress } = await this.ensureResolverExists({ from, name });
     // If the resolver points to a different address or is not set,
     // then set it to the specified address
     if (resolvedAddress !== address) {
-      await this.ensjs.resolver(name).setAddr(address);
+      const tx = await this.ens.name(name).setAddress("ETH", address, { from });
+      await tx.wait();
     }
   }
 
   async setNameOwner({ name, from }) {
-    const nameLabels = name.split(".").reverse();
+    const labels = name.split(".").reverse();;
 
-    // Set top-level name
-    let builtName = nameLabels[0];
-    await this.devRegistry.setSubnodeOwner("0x0", sha3(builtName), from, {
-      from
-    });
+    const current = [];
+    for (const label of labels) {
+      console.debug("label %s", label);
+      const tx = await this.ens.name(current.join("."))
+        .setSubnodeOwner(label, from, { from });
+      await tx.wait();
 
-    // If name is only one label, stop here
-    if (nameLabels.length === 1) return;
-
-    for (const label of nameLabels.slice(1)) {
-      await this.devRegistry.setSubnodeOwner(
-        hash(builtName),
-        sha3(label),
-        from,
-        { from }
-      );
-      builtName = label.concat(`.${builtName}`);
+      current.unshift(label);
     }
+
+    // const sequence = labels
+    //   .map((_, index) => labels.slice(0, index + 1).join("."))
+    //   .reverse();
+
+    // const tld = sequence[0];
+    // await this.ens.name("").setSubnodeOwner(tld, from, { from });
+    // for (const name of sequence.slice(1)) {
+    //   await this.ens.name(name).setOwner(from, { from });
+    // }
+
+
+
+    // // Set top-level name
+    // let builtName = nameLabels[0];
+    // // await this.devRegistry.setSubnodeOwner("0x0", sha3(builtName), from, {
+    // //   from
+    // // });
+
+    // // If name is only one label, stop here
+    // if (nameLabels.length === 1) return;
+
+    // for (const label of nameLabels.slice(1)) {
+    //   await this.devRegistry.setSubnodeOwner(
+    //     hash(builtName),
+    //     sha3(label),
+    //     from,
+    //     { from }
+    //   );
+    //   builtName = label.concat(`.${builtName}`);
+    // }
   }
 
   parseAddress(addressOrContract) {
@@ -163,10 +246,6 @@ class ENS {
         `${from}\n`;
       throw new Error(message);
     }
-  }
-
-  setENSJS() {
-    this.ensjs = new ENSJS(this.provider, this.ensSettings.registryAddress);
   }
 }
 

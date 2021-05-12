@@ -13,17 +13,17 @@ export class FS implements ResolverSource {
   }
 
   require(importPath: string, searchPath = this.contractsBuildDirectory) {
-    const normalizedImportPath = path.normalize(importPath);
-    const contractName = this.getContractName(normalizedImportPath, searchPath);
-
-    // If we have an absolute path, only check the file if it's a child of the workingDirectory.
-    if (path.isAbsolute(normalizedImportPath)) {
-      if (normalizedImportPath.indexOf(this.workingDirectory) !== 0) {
-        return null;
-      }
-    }
-
     try {
+      const normalizedImportPath = path.normalize(importPath);
+      const contractName = this.getContractName(normalizedImportPath, searchPath);
+
+      // If we have an absolute path, only check the file if it's a child of the workingDirectory.
+      if (path.isAbsolute(normalizedImportPath)) {
+        if (normalizedImportPath.indexOf(this.workingDirectory) !== 0) {
+          return null;
+        }
+      }
+
       const result = fs.readFileSync(
         path.join(searchPath, `${contractName}.json`),
         "utf8"

@@ -9,7 +9,7 @@ const ENS = require("./ens");
 class Deployer extends Deployment {
   constructor(options) {
     options = options || {};
-    expect.options(options, ["provider", "networks", "network", "network_id"]);
+    expect.options(options, ["provider", "resolver", "networks", "network", "network_id"]);
 
     const emitter = new Emittery();
     super(emitter, options);
@@ -25,7 +25,8 @@ class Deployer extends Deployment {
     this.known_contracts = {};
     if (options.ens && options.ens.enabled) {
       this.ens = new ENS({
-        provider: options.provider,
+        deployer: this,
+        config: options,
         ensSettings: options.ens
       });
     }

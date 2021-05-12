@@ -24,6 +24,7 @@ export class NPM implements ResolverSource {
     // during testing a temp dir is passed as search path - we need to check the
     // working dir in case a built contract was not copied over to it
     for (const basePath of [searchPath, this.workingDirectory]) {
+      console.debug("basePath %o", basePath);
       if (!basePath) {
         continue;
       }
